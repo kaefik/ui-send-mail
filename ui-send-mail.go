@@ -2,12 +2,18 @@ package main
 
 import (
 	//	"flag"
+	"bytes"
 	"fmt"
-	"html/template"
+	//	"html/template"
 	"net/http"
 	"os"
+	"os/exec"
 	//	"strconv"
 	"strings"
+
+	"github.com/go-martini/martini"
+	"github.com/martini-contrib/auth"
+	"github.com/martini-contrib/render"
 )
 
 ////------------ Объявление типов и глобальных переменных
@@ -17,9 +23,17 @@ var (
 	user string
 )
 
+var (
+	tekuser     string // текущий пользователь который задает условия на срабатывания
+	pathcfg     string // адрес где находятся папки пользователей, если пустая строка, то текущая папка
+	pathcfguser string
+)
+
 type page struct {
-	Title string
-	Msg   string
+	Title  string
+	Msg    string
+	Msg2   string
+	TekUsr string
 }
 
 //------------ END Объявление типов и глобальных переменных
@@ -37,42 +51,104 @@ func Savestrtofile(namef string, str string) int {
 	return 0
 }
 
-func index(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-type", "text/html")
+func indexHandler(user auth.User, rr render.Render, w http.ResponseWriter, r *http.Request) {
 
-	title := r.URL.Path[len("/"):]
+	rr.HTML(200, "index", &page{Title: "Работа с конфиг файлом лога звонков", Msg: "Начальная страница", TekUsr: "Текущий пользователь: " + string(user)})
+}
 
-	if title != "exec/" {
-		t, _ := template.ParseFiles("template.html")
-		t.Execute(w, &page{Title: "Создание файла для рассыли почты", Msg: "Задание триггера (условия) на срабатывание бота цен"})
-	} else {
-		mstr := r.FormValue("multistroka")
-		mm := strings.Split(mstr, "\r\n")
-		fmt.Println("Длина: ", len(mm))
+// обработка редактирования списка получателей
+func EditRecipientHandler(user auth.User, rr render.Render, w http.ResponseWriter, r *http.Request, params martini.Params) {
+	//	nstr, _ := strconv.Atoi(params["nstr"])
+	//	tt := dataConfigFile[nstr]
+	rr.HTML(200, "editrecipient", "")
+}
 
-		tm := make([]string, 0)
+// обработка сохранения списка получателей
+func SaveRecipientsHandler(user auth.User, rr render.Render, w http.ResponseWriter, r *http.Request, params martini.Params) {
 
-		sres := ""
+	mstr := r.FormValue("multistroka")
+	mm := strings.Split(mstr, "\r\n")
+	fmt.Println("Длина: ", len(mm))
 
-		for i := 0; i < len(mm); i++ {
-			if mm[i] != "" {
-				s := mm[i]
-				tm = append(tm, s)
-				sres += s + "\n"
-			}
+	tm := make([]string, 0)
+
+	sres := ""
+
+	for i := 0; i < len(mm); i++ {
+		if mm[i] != "" {
+			s := mm[i]
+			tm = append(tm, s)
+			sres += s + "\n"
 		}
-
-		Savestrtofile("pochta.cfg", sres)
-
-		t1, _ := template.ParseFiles("template-result.html")
-		t1.Execute(w, &page{Title: "Введенные данные: \n ", Msg: sres})
-
 	}
+	sres += "n.zaharova@kazan.2gis.ru" + "\n"
+	sres += "i.saifutdinov@kazan.2gis.ru" + "\n"
+
+	Savestrtofile("pochta.cfg", sres)
+
+	rr.HTML(200, "saverecipients", "")
+}
+
+// обработка редактирования списка получателей
+func EditShablonHandler(user auth.User, rr render.Render, w http.ResponseWriter, r *http.Request, params martini.Params) {
+	//	nstr, _ := strconv.Atoi(params["nstr"])
+	//	tt := dataConfigFile[nstr]
+	rr.HTML(200, "editshablon", "")
+}
+
+// обработка сохранения шаблона письма
+func SaveShablonHandler(user auth.User, rr render.Render, w http.ResponseWriter, r *http.Request, params martini.Params) {
+	mstr := r.FormValue("multistroka")
+	mm := strings.Split(mstr, "\r\n")
+	fmt.Println("Длина: ", len(mm))
+	tm := make([]string, 0)
+	sres := ""
+	for i := 0; i < len(mm); i++ {
+		if mm[i] != "" {
+			s := mm[i]
+			tm = append(tm, s)
+			sres += s + "\n"
+		}
+	}
+	Savestrtofile("shablonmail", sres)
+	rr.HTML(200, "saveshablon", "")
+}
+
+// отправка писем получателям
+func SendMailHandler(user auth.User, rr render.Render, w http.ResponseWriter, r *http.Request, params martini.Params) {
+	cmd := exec.Command("/bin/sh", "client-sendmail.sh")
+	//	cmd.Stdin = strings.NewReader("some input")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Printf("in all caps: %q\n", out.String())
+
+	rr.HTML(200, "sendmail", "")
+}
+
+func authFunc(username, password string) bool {
+	return (auth.SecureCompare(username, "admin") && auth.SecureCompare(password, "qwe123!!"))
 }
 
 func main() {
 
-	http.HandleFunc("/", index)
+	fmt.Println("Starting...")
+	m := martini.Classic()
 
-	http.ListenAndServe(":7777", nil)
+	m.Use(render.Renderer(render.Options{
+		Directory:  "templates", // Specify what path to load the templates from.
+		Layout:     "layout",    // Specify a layout template. Layouts can call {{ yield }} to render the current template.
+		Extensions: []string{".tmpl", ".html"}}))
+
+	m.Use(auth.BasicFunc(authFunc))
+	m.Get("/editshablon", EditShablonHandler)
+	m.Get("/sendmail", SendMailHandler)
+	m.Post("/saveshablon", SaveShablonHandler)
+	m.Get("/editrecipient", EditRecipientHandler)
+	m.Post("/saverecipients", SaveRecipientsHandler)
+	m.Get("/", indexHandler)
+	m.RunOnAddr(":7777")
 }
